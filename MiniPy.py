@@ -1,6 +1,5 @@
-import re
+# --- Token Definition ---
 
-# Token class definition
 class Token:
     def __init__(self, type_, value):
         self.type = type_
@@ -9,7 +8,8 @@ class Token:
     def __repr__(self):
         return f"Token({self.type}, {self.value})"
 
-# Lexer class definition
+# --- Lexer ---
+
 class Lexer:
     def __init__(self, text):
         self.text = text
@@ -30,9 +30,14 @@ class Lexer:
         while self.current_char is not None and self.current_char.isspace():
             self.advance()
 
+    def skip_comment(self):
+        while self.current_char is not None and self.current_char != '\n':
+            self.advance()
+        self.advance()  # Skip the newline character
+
     def variable(self):
         result = ''
-        while self.current_char is not None and self.current_char.isalnum():
+        while self.current_char is not None and (self.current_char.isalnum() or self.current_char == '_'):
             result += self.current_char
             self.advance()
         return Token('VARIABLE', result)
@@ -49,42 +54,39 @@ class Lexer:
             if self.current_char.isspace():
                 self.skip_whitespace()
                 continue
-            if self.current_char.isalpha():
+            if self.current_char == '#':
+                self.skip_comment()
+                continue
+            if self.current_char.isalpha() or self.current_char == '_':
+                if self.text[self.pos:self.pos+3] == 'let':
+                    self.pos += 3
+                    self.current_char = self.text[self.pos] if self.pos < len(self.text) else None
+                    return Token('LET', 'let')
+                if self.text[self.pos:self.pos+5] == 'print':
+                    self.pos += 5
+                    self.current_char = self.text[self.pos] if self.pos < len(self.text) else None
+                    return Token('PRINT', 'print')
                 return self.variable()
             if self.current_char.isdigit():
                 return self.number()
-            if self.current_char == '+':
+            if self.current_char in '+-*/=();':
+                token_type = {
+                    '+': 'PLUS',
+                    '-': 'MINUS',
+                    '*': 'MUL',
+                    '/': 'DIV',
+                    '=': 'EQ',
+                    ';': 'SEMICOLON',
+                    '(': 'LPAREN',
+                    ')': 'RPAREN'
+                }[self.current_char]
                 self.advance()
-                return Token('PLUS', '+')
-            if self.current_char == '-':
-                self.advance()
-                return Token('MINUS', '-')
-            if self.current_char == '*':
-                self.advance()
-                return Token('MUL', '*')
-            if self.current_char == '/':
-                self.advance()
-                return Token('DIV', '/')
-            if self.current_char == '=':
-                self.advance()
-                return Token('EQ', '=')
-            if self.current_char == ';':
-                self.advance()
-                return Token('SEMICOLON', ';')
-            if self.current_char == '(':
-                self.advance()
-                return Token('LPAREN', '(')
-            if self.current_char == ')':
-                self.advance()
-                return Token('RPAREN', ')')
-            if self.current_char == 'p' and self.text[self.pos:self.pos+5] == 'print':
-                self.pos += 5
-                self.current_char = self.text[self.pos] if self.pos < len(self.text) else None
-                return Token('PRINT', 'print')
+                return Token(token_type, token_type)
             self.error()
         return Token('EOF', None)
 
-# AST Node classes
+# --- AST Node Classes ---
+
 class AST:
     pass
 
@@ -126,7 +128,8 @@ class Print(AST):
     def __repr__(self):
         return f"Print({self.expr})"
 
-# Parser class definition
+# --- Parser ---
+
 class Parser:
     def __init__(self, lexer):
         self.lexer = lexer
@@ -179,47 +182,63 @@ class Parser:
         return node
 
     def statement(self):
-        if self.current_token.type == 'VARIABLE':
+        if self.current_token.type == 'LET':
+            self.eat('LET')
             var = self.current_token
             self.eat('VARIABLE')
             self.eat('EQ')
             value = self.expr()
-            self.eat('SEMICOLON')
+            if self.current_token.type == 'SEMICOLON':
+                self.eat('SEMICOLON')
             return Assign(var.value, value)
         elif self.current_token.type == 'PRINT':
             self.eat('PRINT')
             expr = self.expr()
-            self.eat('SEMICOLON')
+            if self.current_token.type == 'SEMICOLON':
+                self.eat('SEMICOLON')
             return Print(expr)
         self.error()
 
     def parse(self):
-        statements = []
-        while self.current_token.type != 'EOF':
-            statements.append(self.statement())
-        return statements
+        return self.statement()
 
-# Interpreter class definition
+# --- Interpreter ---
+
 class Interpreter:
     def __init__(self, parser):
         self.parser = parser
         self.variables = {}
 
+    def error(self):
+        raise Exception('Invalid syntax')
+
+    def visit(self, node):
+        method_name = f"visit_{type(node).__name__}"
+        method = getattr(self, method_name, self.generic_visit)
+        return method(node)
+
+    def generic_visit(self, node):
+        raise Exception(f"No visit_{type(node).__name__} method")
+
     def visit_Num(self, node):
         return node.value
 
     def visit_Var(self, node):
-        return self.variables.get(node.name, 0)
+        if node.name in self.variables:
+            return self.variables[node.name]
+        self.error()
 
     def visit_BinOp(self, node):
+        left = self.visit(node.left)
+        right = self.visit(node.right)
         if node.op.type == 'PLUS':
-            return self.visit(node.left) + self.visit(node.right)
+            return left + right
         elif node.op.type == 'MINUS':
-            return self.visit(node.left) - self.visit(node.right)
+            return left - right
         elif node.op.type == 'MUL':
-            return self.visit(node.left) * self.visit(node.right)
+            return left * right
         elif node.op.type == 'DIV':
-            return self.visit(node.left) / self.visit(node.right)
+            return left / right
         self.error()
 
     def visit_Assign(self, node):
@@ -229,57 +248,22 @@ class Interpreter:
         result = self.visit(node.expr)
         print(result)
 
-    def visit(self, node):
-        method_name = f'visit_{type(node).__name__}'
-        method = getattr(self, method_name, self.error)
-        return method(node)
+# --- Main Execution ---
 
-    def interpret(self):
-        tree = self.parser.parse()
-        for statement in tree:
-            self.visit(statement)
-
-# Help function
-def print_help():
-    help_text = """
-MiniPy Help:
-
-Commands:
-- let <variable> = <expression>;    : Assigns the result of <expression> to <variable>.
-- print(<expression>);              : Prints the result of <expression> to the console.
-- help                            : Displays this help message.
-- exit                            : Exits the MiniPy interpreter.
-
-Expressions:
-- Basic arithmetic: +, -, *, /
-- Parentheses for grouping: ( and )
-- Variables are alphanumeric names.
-
-Examples:
-- let x = 5 + 3;
-- print(x * 2);
-- let y = 10 / (2 + 3);
-- print(y);
-    """
-    print(help_text)
-
-# Main function to run the interpreter
 def main():
-    print("Welcome to MiniPy! Type 'help' for a list of commands.")
     while True:
         try:
-            text = input('MiniPy> ')
-            if text.strip() == 'exit':
-                break
-            elif text.strip() == 'help':
-                print_help()
-            else:
-                lexer = Lexer(text)
-                parser = Parser(lexer)
-                interpreter = Interpreter(parser)
-                interpreter.interpret()
+            text = input("MiniPy> ")
+            if not text.strip():
+                continue
+            lexer = Lexer(text)
+            parser = Parser(lexer)
+            interpreter = Interpreter(parser)
+            ast = parser.parse()
+            if ast is not None:
+                interpreter.visit(ast)
         except Exception as e:
             print(f"Error: {e}")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
